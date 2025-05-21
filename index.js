@@ -124,9 +124,17 @@ async function getWarpcastUsername() {
         "accept": "application/json",
       },
     });
-    if (!res.ok) throw new Error(`Status ${res.status}`);
+
+    if (!res.ok) {
+      const text = await res.text();
+      console.error(`❌ Warpcast API error: Status ${res.status}, Response: ${text}`);
+      return "Unknown";
+    }
+
     const data = await res.json();
-    return data.handle ?? "Unknown";
+    // console.log("Debug Warpcast user data:", data);  <-- hapus atau komentari ini
+
+    return data?.result?.user?.username ?? "Unknown";
   } catch (err) {
     console.error("❌ Gagal ambil username Warpcast:", err);
     return "Unknown";
@@ -191,7 +199,7 @@ async function waitUntil(nextTimestamp) {
 async function main() {
   console.log("🚀 Bot auto claim dimulai...\n");
 
-  // Ambil dulu username Warpcast sekali saja
+  // Ambil username Warpcast sekali saja di awal
   const username = await getWarpcastUsername();
 
   while (true) {
