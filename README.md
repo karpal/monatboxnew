@@ -6,8 +6,8 @@ screen -S monadbox
 ```
 
 ```bash
-git clone https://github.com/karpal/monadbox.git
-cd monadbox
+git clone https://github.com/karpal/monatboxnew.git
+cd monatboxnew
 
 ```
 
