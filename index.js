@@ -7,12 +7,13 @@ const {
   PROVIDER_URL,
   CONTRACT_ADDRESS,
   FID,
-  UPSTASH_AUTH
+  UPSTASH_AUTH,
+  WARPCAST_TOKEN
 } = process.env;
 
-const CLAIM_INTERVAL = 3 * 60 * 60 * 1000; // 3 jam
+const CLAIM_INTERVAL = 3 * 60 * 60 * 1000; // 3 jam cooldown
 
-if (!PRIVATE_KEY || !PROVIDER_URL || !FID || !UPSTASH_AUTH || !CONTRACT_ADDRESS) {
+if (!PRIVATE_KEY || !PROVIDER_URL || !FID || !UPSTASH_AUTH || !CONTRACT_ADDRESS || !WARPCAST_TOKEN) {
   console.error("❌ Harap isi semua variabel di file .env");
   process.exit(1);
 }
@@ -25,7 +26,6 @@ function formatDate(timestamp) {
 }
 
 function formatRemainingTime(ms) {
-  if (ms <= 0) return "0h 0m 0s";
   const totalSeconds = Math.floor(ms / 1000);
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
@@ -99,8 +99,8 @@ async function getRankAndPoints() {
         Authorization: UPSTASH_AUTH,
       },
       body: JSON.stringify([
-        ["zscore", "leaderboard", FID],
-        ["zrevrank", "leaderboard", FID],
+        ["zscore", "leaderboard", Number(FID)],
+        ["zrevrank", "leaderboard", Number(FID)],
       ]),
     });
 
@@ -115,6 +115,68 @@ async function getRankAndPoints() {
   }
 }
 
+async function sendWarpcastEvent() {
+  try {
+    const res = await fetch("https://client.warpcast.com/v2/frame-event", {
+      method: "PUT",
+      headers: {
+        "accept": "*/*",
+        "accept-language": "en-US,en;q=0.9",
+        "authorization": `Bearer ${WARPCAST_TOKEN}`,
+        "cache-control": "no-cache",
+        "content-type": "application/json; charset=utf-8",
+        "fc-amplitude-device-id": "JrBNb4rFA7aeWP-2LzABWL",
+        "fc-amplitude-session-id": "1747823515418",
+        "idempotency-key": `warpcast-${Date.now()}`,
+        "pragma": "no-cache",
+        "priority": "u=1, i",
+        "sec-ch-ua": "\"Chromium\";v=\"136\", \"Google Chrome\";v=\"136\", \"Not.A/Brand\";v=\"99\"",
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": "\"Windows\"",
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-site"
+      },
+      referrer: "https://warpcast.com/",
+      referrerPolicy: "strict-origin-when-cross-origin",
+      body: JSON.stringify({ event: { eventType: "frame-open", domain: "monadbox.vercel.app" } }),
+      credentials: "include"
+    });
+
+    if (!res.ok) throw new Error(`Status ${res.status}`);
+
+    console.log("✅ Warpcast event berhasil dikirim.");
+    return true;
+  } catch (error) {
+    console.error("❌ Gagal kirim Warpcast event:", error);
+    return false;
+  }
+}
+
+function printCountdown(ms) {
+  process.stdout.clearLine();
+  process.stdout.cursorTo(0);
+  process.stdout.write(`⏳ Waktu cooldown tersisa: ${formatRemainingTime(ms)}`);
+}
+
+async function waitWithCountdown(duration) {
+  const intervalMs = 1000;
+  let remaining = duration;
+
+  return new Promise((resolve) => {
+    const interval = setInterval(() => {
+      if (remaining <= 0) {
+        clearInterval(interval);
+        process.stdout.write("\n");
+        resolve();
+      } else {
+        printCountdown(remaining);
+        remaining -= intervalMs;
+      }
+    }, intervalMs);
+  });
+}
+
 async function main() {
   console.log("🚀 Bot auto claim dimulai...\n");
 
@@ -127,39 +189,27 @@ async function main() {
     } else {
       const nextClaim = lastOpen + CLAIM_INTERVAL;
 
+      console.log(`🕐 Last open at: ${formatDate(lastOpen)}`);
+      console.log(`🕐 Next claim at: ${formatDate(nextClaim)}`);
+
       if (now < nextClaim) {
-        const { points, rank } = await getRankAndPoints();
-        console.log(`🎯 Rank: ${rank} | Points: ${points}`);
-        console.log(`🕐 Last open at: ${formatDate(lastOpen)}`);
-        console.log(`🕐 Next claim at: ${formatDate(nextClaim)}`);
-        console.log("⏳ Waktu cooldown tersisa:");
+        const remaining = nextClaim - now;
 
-        // TIMER COUNTDOWN (update tiap detik)
-        let remaining = nextClaim - Date.now();
+        // Tampilkan countdown realtime
+        await waitWithCountdown(remaining);
 
-        await new Promise((resolve) => {
-          const interval = setInterval(() => {
-            remaining = nextClaim - Date.now();
-
-            // update di baris yang sama
-            process.stdout.write("\r" + formatRemainingTime(remaining) + "  ");
-
-            if (remaining <= 0) {
-              clearInterval(interval);
-              process.stdout.write("\n\n");
-              resolve();
-            }
-          }, 1000);
-        });
+        continue;
       }
     }
 
-    // Klaim box setelah cooldown selesai
     const result = await claimBox();
 
     if (result?.ok) {
       console.log(`✅ Klaim berhasil via ${result.method}`);
       if (result.txHash) console.log(`🔗 Tx Hash: ${result.txHash}`);
+
+      // Kirim event ke Warpcast supaya point bertambah
+      await sendWarpcastEvent();
     } else {
       console.log("❌ Klaim gagal via semua metode.");
     }
@@ -167,7 +217,7 @@ async function main() {
     const { points, rank } = await getRankAndPoints();
     console.log(`🎯 Rank: ${rank} | Points: ${points}\n`);
 
-    await new Promise((r) => setTimeout(r, CLAIM_INTERVAL));
+    await waitWithCountdown(CLAIM_INTERVAL);
   }
 }
 
