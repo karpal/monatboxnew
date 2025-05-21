@@ -2,7 +2,7 @@ MONAD BOX auto claim
 
 biar jalan 24jam
 ```bash
-screen -S monadbox
+screen -S monadboxnew
 ```
 
 ```bash
