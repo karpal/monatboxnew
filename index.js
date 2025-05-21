@@ -11,7 +11,6 @@ const {
 } = process.env;
 
 const CLAIM_INTERVAL = 3 * 60 * 60 * 1000; // 3 jam
-const POINTS_TO_ADD = 918;
 
 if (!PRIVATE_KEY || !PROVIDER_URL || !FID || !UPSTASH_AUTH || !CONTRACT_ADDRESS) {
   console.error("❌ Harap isi semua variabel di file .env");
@@ -26,6 +25,7 @@ function formatDate(timestamp) {
 }
 
 function formatRemainingTime(ms) {
+  if (ms <= 0) return "0h 0m 0s";
   const totalSeconds = Math.floor(ms / 1000);
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
@@ -44,31 +44,6 @@ async function getCooldown() {
   }
 }
 
-async function updatePoints(fid, points, method) {
-  try {
-    const res = await fetch("https://evolved-macaw-13512.upstash.io/pipeline", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: UPSTASH_AUTH,
-      },
-      body: JSON.stringify([
-        ["zincrby", "leaderboard", points, String(fid)],
-        ["lpush", `history:${fid}`, JSON.stringify({
-          timestamp: Date.now(),
-          method,
-          points,
-        })],
-      ]),
-    });
-    const result = await res.json();
-    return result;
-  } catch (err) {
-    console.error("❌ Gagal update poin ke Redis:", err);
-    return null;
-  }
-}
-
 async function claimBox() {
   const ABI = ["function openBox() external"];
   const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, wallet);
@@ -79,10 +54,6 @@ async function claimBox() {
     console.log(`⏳ Menunggu konfirmasi transaksi... Hash: ${tx.hash}`);
     await tx.wait();
     console.log("✅ Klaim on-chain berhasil!");
-
-    const redisUpdate = await updatePoints(FID, POINTS_TO_ADD, "on-chain");
-    console.log("🎯 Poin berhasil ditambahkan ke leaderboard:", redisUpdate);
-
     return { ok: true, method: "on-chain", txHash: tx.hash };
   } catch (onChainError) {
     console.warn("⚠️ Klaim on-chain gagal. Mencoba fallback ke API...");
@@ -107,9 +78,6 @@ async function claimBox() {
 
       if (result?.ok) {
         console.log("✅ Klaim via API berhasil (fallback).");
-
-        const redisUpdate = await updatePoints(FID, POINTS_TO_ADD, "api-fallback");
-        console.log("🎯 Poin berhasil ditambahkan ke leaderboard:", redisUpdate);
       } else {
         console.log("❌ Klaim API fallback gagal atau sudah pernah klaim.");
       }
@@ -148,7 +116,7 @@ async function getRankAndPoints() {
 }
 
 async function main() {
-  console.log("🚀 Bot auto-claim dimulai...\n");
+  console.log("🚀 Bot auto claim dimulai...\n");
 
   while (true) {
     const lastOpen = await getCooldown();
@@ -159,21 +127,34 @@ async function main() {
     } else {
       const nextClaim = lastOpen + CLAIM_INTERVAL;
 
-      console.log(`🕐 Last open at: ${formatDate(lastOpen)}`);
-      console.log(`🕐 Next claim at: ${formatDate(nextClaim)}`);
-
       if (now < nextClaim) {
-        const remaining = nextClaim - now;
-        console.log(`⏳ Waktu cooldown tersisa: ${formatRemainingTime(remaining)}`);
-
         const { points, rank } = await getRankAndPoints();
-        console.log(`🎯 Rank: ${rank} | Points: ${points}\n`);
+        console.log(`🎯 Rank: ${rank} | Points: ${points}`);
+        console.log(`🕐 Last open at: ${formatDate(lastOpen)}`);
+        console.log(`🕐 Next claim at: ${formatDate(nextClaim)}`);
+        console.log("⏳ Waktu cooldown tersisa:");
 
-        await new Promise((r) => setTimeout(r, remaining));
-        continue;
+        // TIMER COUNTDOWN (update tiap detik)
+        let remaining = nextClaim - Date.now();
+
+        await new Promise((resolve) => {
+          const interval = setInterval(() => {
+            remaining = nextClaim - Date.now();
+
+            // update di baris yang sama
+            process.stdout.write("\r" + formatRemainingTime(remaining) + "  ");
+
+            if (remaining <= 0) {
+              clearInterval(interval);
+              process.stdout.write("\n\n");
+              resolve();
+            }
+          }, 1000);
+        });
       }
     }
 
+    // Klaim box setelah cooldown selesai
     const result = await claimBox();
 
     if (result?.ok) {
