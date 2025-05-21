@@ -115,6 +115,24 @@ async function getRankAndPoints() {
   }
 }
 
+async function getWarpcastUsername() {
+  try {
+    const res = await fetch("https://client.warpcast.com/v2/me", {
+      method: "GET",
+      headers: {
+        "authorization": `Bearer ${WARPCAST_TOKEN}`,
+        "accept": "application/json",
+      },
+    });
+    if (!res.ok) throw new Error(`Status ${res.status}`);
+    const data = await res.json();
+    return data.handle ?? "Unknown";
+  } catch (err) {
+    console.error("❌ Gagal ambil username Warpcast:", err);
+    return "Unknown";
+  }
+}
+
 async function sendWarpcastEvent() {
   try {
     const res = await fetch("https://client.warpcast.com/v2/frame-event", {
@@ -159,65 +177,57 @@ function printCountdown(ms) {
   process.stdout.write(`⏳ Waktu cooldown tersisa: ${formatRemainingTime(ms)}`);
 }
 
-async function waitWithCountdown(duration) {
-  const intervalMs = 1000;
-  let remaining = duration;
-
-  return new Promise((resolve) => {
-    const interval = setInterval(() => {
-      if (remaining <= 0) {
-        clearInterval(interval);
-        process.stdout.write("\n");
-        resolve();
-      } else {
-        printCountdown(remaining);
-        remaining -= intervalMs;
-      }
-    }, intervalMs);
-  });
+async function waitUntil(nextTimestamp) {
+  while (true) {
+    const now = Date.now();
+    const remaining = nextTimestamp - now;
+    if (remaining <= 0) break;
+    printCountdown(remaining);
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  process.stdout.write("\n");
 }
 
 async function main() {
   console.log("🚀 Bot auto claim dimulai...\n");
 
+  // Ambil dulu username Warpcast sekali saja
+  const username = await getWarpcastUsername();
+
   while (true) {
     const lastOpen = await getCooldown();
     const now = Date.now();
 
+    let nextClaim;
     if (!lastOpen) {
       console.log("⚠️ Tidak dapat data cooldown, coba claim langsung.");
+      nextClaim = now; // langsung claim
     } else {
-      const nextClaim = lastOpen + CLAIM_INTERVAL;
+      nextClaim = lastOpen + CLAIM_INTERVAL;
+    }
 
-      console.log(`🕐 Last open at: ${formatDate(lastOpen)}`);
-      console.log(`🕐 Next claim at: ${formatDate(nextClaim)}`);
-
-      if (now < nextClaim) {
-        const remaining = nextClaim - now;
-
-        // Tampilkan countdown realtime
-        await waitWithCountdown(remaining);
-
-        continue;
-      }
+    if (now < nextClaim) {
+      const { points, rank } = await getRankAndPoints();
+      console.log(`👤 Warpcast: ${username} | 🎯 Rank: ${rank} | Points: ${points}`);
+      await waitUntil(nextClaim);
     }
 
     const result = await claimBox();
 
     if (result?.ok) {
-      console.log(`✅ Klaim berhasil via ${result.method}`);
+      console.log(`\n✅ Klaim berhasil via ${result.method}`);
       if (result.txHash) console.log(`🔗 Tx Hash: ${result.txHash}`);
 
       // Kirim event ke Warpcast supaya point bertambah
       await sendWarpcastEvent();
     } else {
-      console.log("❌ Klaim gagal via semua metode.");
+      console.log("\n❌ Klaim gagal via semua metode.");
     }
 
     const { points, rank } = await getRankAndPoints();
-    console.log(`🎯 Rank: ${rank} | Points: ${points}\n`);
+    console.log(`👤 Warpcast: ${username} | 🎯 Rank: ${rank} | Points: ${points}\n`);
 
-    await waitWithCountdown(CLAIM_INTERVAL);
+    // langsung cek cooldown baru tanpa delay tambahan
   }
 }
 
